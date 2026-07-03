@@ -207,10 +207,12 @@ function smtpConfig() {
   };
 }
 
-function resendConfig() {
+function gmailApiConfig() {
   return {
-    apiKey: process.env.RESEND_API_KEY || "",
-    from: process.env.RESEND_FROM || process.env.MAIL_FROM || ""
+    clientId: process.env.GMAIL_CLIENT_ID || "",
+    clientSecret: process.env.GMAIL_CLIENT_SECRET || "",
+    refreshToken: process.env.GMAIL_REFRESH_TOKEN || "",
+    user: process.env.GMAIL_USER || process.env.SMTP_USER || process.env.MAIL_FROM || ""
   };
 }
 
@@ -300,8 +302,8 @@ function buildEmail({ from, to, subject, html }) {
 }
 
 async function sendMail({ to, subject, html }) {
-  if (process.env.RESEND_API_KEY) {
-    return sendMailWithResend({ to, subject, html });
+  if (process.env.GMAIL_REFRESH_TOKEN) {
+    return sendMailWithGmailApi({ to, subject, html });
   }
 
   const config = requireSmtpConfig();
@@ -329,29 +331,72 @@ async function sendMail({ to, subject, html }) {
   socket.end();
 }
 
-async function sendMailWithResend({ to, subject, html }) {
-  const config = resendConfig();
-  if (!config.apiKey || !config.from) {
-    throw Object.assign(new Error("Resend settings are missing: RESEND_API_KEY, MAIL_FROM."), { status: 400 });
+function base64Url(value) {
+  return Buffer.from(String(value), "utf8")
+    .toString("base64")
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/g, "");
+}
+
+async function getGmailAccessToken(config) {
+  const body = new URLSearchParams({
+    client_id: config.clientId,
+    client_secret: config.clientSecret,
+    refresh_token: config.refreshToken,
+    grant_type: "refresh_token"
+  });
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.access_token) {
+    throw new Error(`Gmail token error (${response.status}): ${JSON.stringify(data)}`);
+  }
+  return data.access_token;
+}
+
+function buildGmailRawMessage({ from, to, subject, html }) {
+  return base64Url([
+    `From: ${formatAddress(from)}`,
+    `To: ${formatAddress(to)}`,
+    `Subject: =?UTF-8?B?${base64(subject)}?=`,
+    "MIME-Version: 1.0",
+    "Content-Type: text/html; charset=UTF-8",
+    "Content-Transfer-Encoding: base64",
+    "",
+    wrapBase64(html)
+  ].join("\r\n"));
+}
+
+async function sendMailWithGmailApi({ to, subject, html }) {
+  const config = gmailApiConfig();
+  const missing = [];
+  for (const key of ["clientId", "clientSecret", "refreshToken", "user"]) {
+    if (!config[key]) missing.push(key);
+  }
+  if (missing.length) {
+    throw Object.assign(new Error(`Gmail API settings are missing: ${missing.join(", ")}.`), { status: 400 });
   }
 
-  const response = await fetch("https://api.resend.com/emails", {
+  const accessToken = await getGmailAccessToken(config);
+  const raw = buildGmailRawMessage({ from: config.user, to, subject, html });
+  const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(config.user)}/messages/send`, {
     method: "POST",
     headers: {
-      "authorization": `Bearer ${config.apiKey}`,
+      "authorization": `Bearer ${accessToken}`,
       "content-type": "application/json"
     },
-    body: JSON.stringify({
-      from: config.from,
-      to: [to],
-      subject,
-      html
-    })
+    body: JSON.stringify({ raw })
   });
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Resend API error (${response.status}): ${body}`);
+    throw new Error(`Gmail API send error (${response.status}): ${body}`);
   }
 }
 
