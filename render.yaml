@@ -19,9 +19,13 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
-      - key: RESEND_API_KEY
+      - key: GMAIL_CLIENT_ID
         sync: false
-      - key: RESEND_FROM
+      - key: GMAIL_CLIENT_SECRET
+        sync: false
+      - key: GMAIL_REFRESH_TOKEN
+        sync: false
+      - key: GMAIL_USER
         sync: false
       - key: NAVER_TLS_REJECT_UNAUTHORIZED
         value: 1
