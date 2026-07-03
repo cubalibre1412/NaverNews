@@ -496,6 +496,8 @@ async function handleRequest(req, res) {
     if (req.url.startsWith("/api/")) return await handleApi(req, res);
     return await serveStatic(req, res);
   } catch (error) {
+    console.error(`[${new Date().toISOString()}] ${req.method} ${req.url} failed`);
+    console.error(error && error.stack ? error.stack : error);
     json(res, error.status || 500, { error: error.message || "Server error." });
   }
 }
