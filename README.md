@@ -29,6 +29,17 @@ node server.js
 
 Port 587 is also supported. Set `SMTP_SECURE=false` and the app will use STARTTLS.
 
+## Resend setup for Render
+
+If Gmail SMTP times out on Render, use Resend instead. Set:
+
+```text
+RESEND_API_KEY=re_xxxxxxxxx
+MAIL_FROM=onboarding@resend.dev
+```
+
+When `RESEND_API_KEY` is present, the app sends mail through Resend over HTTPS and ignores SMTP for delivery.
+
 ## Deploy
 
 This is a server app because it needs a scheduler, SMTP delivery, and local subscription storage. It cannot run on GitHub Pages alone.
@@ -46,6 +57,8 @@ After deployment, set these environment variables in the hosting service:
 - `SMTP_USER`
 - `SMTP_PASS`
 - `MAIL_FROM`
+
+For Render, `RESEND_API_KEY` plus `MAIL_FROM` is usually more reliable than SMTP.
 
 If Naver requests fail because of a trusted corporate HTTPS inspection proxy, set `NAVER_TLS_REJECT_UNAUTHORIZED=0` only in that trusted environment.
 
