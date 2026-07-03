@@ -1,0 +1,14 @@
+{
+  "name": "naver-news-mailer",
+  "version": "1.0.0",
+  "description": "Naver News keyword subscriptions with daily email delivery.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  }
+}
