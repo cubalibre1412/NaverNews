@@ -210,7 +210,7 @@ function smtpConfig() {
 function resendConfig() {
   return {
     apiKey: process.env.RESEND_API_KEY || "",
-    from: process.env.MAIL_FROM || process.env.RESEND_FROM || ""
+    from: process.env.RESEND_FROM || process.env.MAIL_FROM || ""
   };
 }
 
