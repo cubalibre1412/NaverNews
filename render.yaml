@@ -19,5 +19,9 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM
+        sync: false
       - key: NAVER_TLS_REJECT_UNAUTHORIZED
         value: 1
