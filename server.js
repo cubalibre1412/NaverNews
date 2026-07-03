@@ -207,6 +207,13 @@ function smtpConfig() {
   };
 }
 
+function resendConfig() {
+  return {
+    apiKey: process.env.RESEND_API_KEY || "",
+    from: process.env.MAIL_FROM || process.env.RESEND_FROM || ""
+  };
+}
+
 function requireSmtpConfig() {
   const config = smtpConfig();
   const missing = [];
@@ -293,6 +300,10 @@ function buildEmail({ from, to, subject, html }) {
 }
 
 async function sendMail({ to, subject, html }) {
+  if (process.env.RESEND_API_KEY) {
+    return sendMailWithResend({ to, subject, html });
+  }
+
   const config = requireSmtpConfig();
   let socket = await smtpConnect(config);
 
@@ -316,6 +327,32 @@ async function sendMail({ to, subject, html }) {
   await smtpCommand(socket, null, 250);
   socket.write("QUIT\r\n");
   socket.end();
+}
+
+async function sendMailWithResend({ to, subject, html }) {
+  const config = resendConfig();
+  if (!config.apiKey || !config.from) {
+    throw Object.assign(new Error("Resend settings are missing: RESEND_API_KEY, MAIL_FROM."), { status: 400 });
+  }
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "authorization": `Bearer ${config.apiKey}`,
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({
+      from: config.from,
+      to: [to],
+      subject,
+      html
+    })
+  });
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Resend API error (${response.status}): ${body}`);
+  }
 }
 
 function escapeHtml(value) {
