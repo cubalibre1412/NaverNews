@@ -2,6 +2,8 @@
 
 A small Node.js web app that searches Naver News by keyword and sends a daily email digest to registered recipients.
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/cubalibre1412/NaverNews)
+
 ## Run locally
 
 ```powershell
@@ -33,7 +35,7 @@ This is a server app because it needs a scheduler, SMTP delivery, and local subs
 
 Recommended deployment options:
 
-- Render: connect this GitHub repository and use the included `render.yaml` blueprint.
+- Render: connect this GitHub repository and use the included `render.yaml` blueprint, or click the Deploy to Render button above.
 - Railway or Fly.io: deploy the included `Dockerfile`.
 
 After deployment, set these environment variables in the hosting service:
