@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Naver News Mailer</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Naver News Mailer</p>
+          <h1>Track Naver News keywords and receive a daily email digest.</h1>
+        </div>
+        <div class="status" id="smtpStatus">Checking mail setup</div>
+      </section>
+
+      <section class="workspace">
+        <div class="panel">
+          <h2>Search preview</h2>
+          <form id="searchForm" class="form-row">
+            <label>
+              <span>Keyword</span>
+              <input id="searchKeyword" name="keyword" placeholder="Example: Pulmuone ESG" autocomplete="off" required>
+            </label>
+            <button type="submit">Search</button>
+          </form>
+          <div id="searchResults" class="results empty">Search a keyword to preview the latest Naver News results.</div>
+        </div>
+
+        <div class="panel">
+          <h2>Email subscription</h2>
+          <form id="subscriptionForm" class="stack">
+            <label>
+              <span>Keyword</span>
+              <input name="keyword" placeholder="Keyword to search every day" required>
+            </label>
+            <label>
+              <span>Email</span>
+              <input name="email" type="email" placeholder="name@example.com" required>
+            </label>
+            <div class="two-cols">
+              <label>
+                <span>Send time</span>
+                <input name="sendTime" type="time" value="09:00" required>
+              </label>
+              <label>
+                <span>Result count</span>
+                <input name="limit" type="number" min="1" max="30" value="10" required>
+              </label>
+            </div>
+            <button type="submit">Add subscription</button>
+          </form>
+          <p class="hint">Daily sending works while the server is running. Times use Korea Standard Time.</p>
+        </div>
+      </section>
+
+      <section class="panel full">
+        <div class="section-head">
+          <h2>Subscriptions</h2>
+          <button class="secondary" id="refreshButton" type="button">Refresh</button>
+        </div>
+        <div id="subscriptions" class="subscriptions empty">No subscriptions yet.</div>
+      </section>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
