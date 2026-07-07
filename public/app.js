@@ -72,7 +72,7 @@ function renderSubscriptions(subscriptions) {
         <li class="sub-item">
           <div class="sub-top">
             <div>
-              <p class="sub-title">${escapeHtml(item.keyword)}</p>
+              <p class="sub-title">${escapeHtml((item.keywords && item.keywords.length ? item.keywords : [item.keyword]).join(", "))}</p>
               <div class="meta">
                 <span>${escapeHtml(item.email)}</span>
                 <span>Daily ${escapeHtml(item.sendTime)}</span>
@@ -85,9 +85,34 @@ function renderSubscriptions(subscriptions) {
           </div>
           <div class="sub-actions">
             <button class="secondary" data-action="test" data-id="${item.id}" type="button">Send test</button>
+            <button class="secondary" data-action="edit" data-id="${item.id}" type="button">Edit</button>
             <button class="secondary" data-action="toggle" data-id="${item.id}" data-active="${item.active}" type="button">${item.active ? "Pause" : "Resume"}</button>
             <button class="danger" data-action="delete" data-id="${item.id}" type="button">Delete</button>
           </div>
+          <form class="edit-form stack" data-edit-id="${item.id}" hidden>
+            <label>
+              <span>Keywords</span>
+              <textarea name="keywords" rows="4" required>${escapeHtml((item.keywords && item.keywords.length ? item.keywords : [item.keyword]).join("\n"))}</textarea>
+            </label>
+            <label>
+              <span>Email</span>
+              <input name="email" type="email" value="${escapeHtml(item.email)}" required>
+            </label>
+            <div class="two-cols">
+              <label>
+                <span>Send time</span>
+                <input name="sendTime" type="time" value="${escapeHtml(item.sendTime)}" required>
+              </label>
+              <label>
+                <span>Result count</span>
+                <input name="limit" type="number" min="1" max="30" value="${escapeHtml(item.limit)}" required>
+              </label>
+            </div>
+            <div class="sub-actions">
+              <button type="submit">Save changes</button>
+              <button class="secondary" data-action="cancel-edit" data-id="${item.id}" type="button">Cancel</button>
+            </div>
+          </form>
         </li>
       `).join("")}
     </ul>`;
@@ -95,8 +120,8 @@ function renderSubscriptions(subscriptions) {
 
 async function loadSubscriptions() {
   const data = await api("/api/subscriptions");
-  smtpStatus.textContent = data.smtpReady ? "Mail ready" : "SMTP setup needed";
-  smtpStatus.className = `status ${data.smtpReady ? "ready" : "warn"}`;
+  smtpStatus.textContent = data.mailReady || data.smtpReady ? "Mail ready" : "Mail setup needed";
+  smtpStatus.className = `status ${data.mailReady || data.smtpReady ? "ready" : "warn"}`;
   renderSubscriptions(data.subscriptions);
 }
 
@@ -154,6 +179,20 @@ subscriptionsNode.addEventListener("click", async (event) => {
   button.disabled = true;
 
   try {
+    if (action === "edit") {
+      const form = subscriptionsNode.querySelector(`form[data-edit-id="${CSS.escape(id)}"]`);
+      if (form) form.hidden = !form.hidden;
+      button.disabled = false;
+      return;
+    }
+
+    if (action === "cancel-edit") {
+      const form = subscriptionsNode.querySelector(`form[data-edit-id="${CSS.escape(id)}"]`);
+      if (form) form.hidden = true;
+      button.disabled = false;
+      return;
+    }
+
     if (action === "delete") {
       await api(`/api/subscriptions/${id}`, { method: "DELETE" });
       notify("Subscription deleted.");
@@ -173,6 +212,29 @@ subscriptionsNode.addEventListener("click", async (event) => {
     }
 
     await loadSubscriptions();
+  } catch (error) {
+    notify(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+});
+
+subscriptionsNode.addEventListener("submit", async (event) => {
+  const form = event.target.closest("form[data-edit-id]");
+  if (!form) return;
+  event.preventDefault();
+
+  const button = form.querySelector("button[type='submit']");
+  const id = form.dataset.editId;
+  button.disabled = true;
+
+  try {
+    await api(`/api/subscriptions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(Object.fromEntries(new FormData(form)))
+    });
+    await loadSubscriptions();
+    notify("Subscription updated.");
   } catch (error) {
     notify(error.message, "error");
   } finally {
