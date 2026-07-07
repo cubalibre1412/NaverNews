@@ -13,7 +13,7 @@ Open `http://localhost:4173`.
 
 ## Subscription storage
 
-Subscriptions are saved as JSON on the server. By default, the file is:
+Subscriptions and sent article URLs are saved as JSON on the server. By default, the file is:
 
 ```text
 data/subscriptions.json
@@ -26,6 +26,8 @@ DATA_DIR=/var/data
 ```
 
 Only files under the disk mount path survive deploys and restarts on Render. If you keep the default Render filesystem without a persistent disk, subscriptions can disappear after a redeploy or instance replacement.
+
+Each subscription stores recently sent article URLs. After the first email, matching URLs are skipped in later emails so the same article is not sent again. If there are no new articles, the app does not send an empty email.
 
 ## Gmail API setup for Render
 
@@ -74,6 +76,7 @@ If Naver requests fail because of a trusted corporate HTTPS inspection proxy, se
 - Preview latest Naver News search results.
 - Register multiple keywords, recipient email, daily send time, and result count.
 - Edit, pause, resume, delete, and test subscriptions from the Subscriptions menu.
+- Skip articles that were already sent for the same subscription.
 - Send a test email for a subscription.
 - Check every minute and send each active subscription once per day at the configured Korea time.
 - Store subscriptions in `data/subscriptions.json` or the `DATA_DIR` path.
