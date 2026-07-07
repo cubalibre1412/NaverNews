@@ -11,6 +11,22 @@ node server.js
 
 Open `http://localhost:4173`.
 
+## Subscription storage
+
+Subscriptions are saved as JSON on the server. By default, the file is:
+
+```text
+data/subscriptions.json
+```
+
+For Render, attach a persistent disk and set:
+
+```text
+DATA_DIR=/var/data
+```
+
+Only files under the disk mount path survive deploys and restarts on Render. If you keep the default Render filesystem without a persistent disk, subscriptions can disappear after a redeploy or instance replacement.
+
 ## Gmail API setup for Render
 
 Render may time out when connecting to Gmail SMTP. The Gmail API path sends over HTTPS and avoids SMTP ports. Set:
@@ -56,7 +72,8 @@ If Naver requests fail because of a trusted corporate HTTPS inspection proxy, se
 ## Features
 
 - Preview latest Naver News search results.
-- Register keyword, recipient email, daily send time, and result count.
+- Register multiple keywords, recipient email, daily send time, and result count.
+- Edit, pause, resume, delete, and test subscriptions from the Subscriptions menu.
 - Send a test email for a subscription.
 - Check every minute and send each active subscription once per day at the configured Korea time.
-- Store subscriptions in `data/subscriptions.json`.
+- Store subscriptions in `data/subscriptions.json` or the `DATA_DIR` path.
