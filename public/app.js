@@ -77,7 +77,9 @@ function renderSubscriptions(subscriptions) {
                 <span>${escapeHtml(item.email)}</span>
                 <span>Daily ${escapeHtml(item.sendTime)}</span>
                 <span>${item.limit} results</span>
+                ${item.sentItems && item.sentItems.length ? `<span>${item.sentItems.length} sent URLs stored</span>` : ""}
                 ${item.lastSentAt ? `<span>Last sent ${new Date(item.lastSentAt).toLocaleString("ko-KR")}</span>` : ""}
+                ${item.lastStatus === "no_new" ? "<span>No new articles last time</span>" : ""}
               </div>
               ${item.lastError ? `<p class="summary">Last error: ${escapeHtml(item.lastError)}</p>` : ""}
             </div>
@@ -208,7 +210,7 @@ subscriptionsNode.addEventListener("click", async (event) => {
 
     if (action === "test") {
       const data = await api(`/api/subscriptions/${id}/test`, { method: "POST", body: "{}" });
-      notify(`Test email sent with ${data.count} results.`);
+      notify(data.sent ? `Test email sent with ${data.count} new results.` : "No new articles to send.");
     }
 
     await loadSubscriptions();
