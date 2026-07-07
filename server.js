@@ -7,7 +7,7 @@ const path = require("path");
 const tls = require("tls");
 
 const PORT = Number(process.env.PORT || 4173);
-const DATA_DIR = path.join(__dirname, "data");
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "subscriptions.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DEFAULT_SEND_TIME = "09:00";
@@ -55,6 +55,7 @@ async function loadSubscriptions() {
   await fs.mkdir(DATA_DIR, { recursive: true });
   try {
     subscriptions = JSON.parse(await fs.readFile(DATA_FILE, "utf8"));
+    subscriptions = Array.isArray(subscriptions) ? subscriptions.map(normalizeSubscription) : [];
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
     subscriptions = [];
@@ -69,6 +70,37 @@ async function saveSubscriptions() {
 
 function cleanKeyword(value) {
   return String(value || "").trim().replace(/\s+/g, " ");
+}
+
+function cleanKeywords(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[\n,]+/);
+  const seen = new Set();
+  const keywords = [];
+
+  for (const item of raw) {
+    const keyword = cleanKeyword(item);
+    const key = keyword.toLowerCase();
+    if (!keyword || seen.has(key)) continue;
+    seen.add(key);
+    keywords.push(keyword);
+  }
+
+  return keywords.slice(0, 20);
+}
+
+function normalizeSubscription(subscription) {
+  const keywords = cleanKeywords(subscription.keywords && subscription.keywords.length
+    ? subscription.keywords
+    : subscription.keyword);
+  return {
+    ...subscription,
+    keyword: keywords[0] || cleanKeyword(subscription.keyword),
+    keywords: keywords.length ? keywords : cleanKeywords(subscription.keyword),
+    limit: Math.min(Math.max(Number(subscription.limit) || DEFAULT_LIMIT, 1), 30),
+    active: subscription.active !== false
+  };
 }
 
 function isEmail(value) {
@@ -408,43 +440,60 @@ function escapeHtml(value) {
     .replace(/"/g, "&quot;");
 }
 
-function buildDigestHtml(subscription, result) {
-  const items = result.items;
-  const list = items.length
-    ? items.map((item, index) => `
+function buildDigestHtml(subscription, results) {
+  const sections = results.map((result) => {
+    const items = result.items;
+    const list = items.length
+      ? items.map((item, index) => `
       <li style="margin:0 0 18px;">
         <a href="${escapeHtml(item.url)}" style="font-weight:700;color:#1558d6;text-decoration:none;">${index + 1}. ${escapeHtml(item.title)}</a>
         <div style="margin-top:5px;color:#667085;font-size:13px;">${escapeHtml([item.source, item.dateText].filter(Boolean).join(" - "))}</div>
         <p style="margin:6px 0 0;color:#344054;line-height:1.5;">${escapeHtml(item.summary)}</p>
       </li>`).join("")
-    : "<li>No news results were found today.</li>";
+      : "<li>No news results were found today.</li>";
+
+    return `
+      <section style="margin:0 0 28px;">
+        <h3 style="margin:0 0 8px;">${escapeHtml(result.keyword)}</h3>
+        <ol style="padding-left:22px;">${list}</ol>
+        <p style="margin-top:12px;">
+          <a href="${escapeHtml(result.sourceUrl)}" style="color:#1558d6;">View all ${escapeHtml(result.keyword)} results on Naver</a>
+        </p>
+      </section>`;
+  }).join("");
+
+  const title = (subscription.keywords || [subscription.keyword]).join(", ");
 
   return `<!doctype html>
   <html lang="ko">
     <body style="font-family:Arial,'Apple SD Gothic Neo','Malgun Gothic',sans-serif;color:#101828;">
-      <h2 style="margin:0 0 8px;">Naver News results: ${escapeHtml(subscription.keyword)}</h2>
-      <p style="margin:0 0 20px;color:#667085;">Fetched at: ${new Date(result.fetchedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</p>
-      <ol style="padding-left:22px;">${list}</ol>
-      <p style="margin-top:24px;">
-        <a href="${escapeHtml(result.sourceUrl)}" style="color:#1558d6;">View all results on Naver</a>
-      </p>
+      <h2 style="margin:0 0 8px;">Naver News results: ${escapeHtml(title)}</h2>
+      <p style="margin:0 0 20px;color:#667085;">Fetched at: ${new Date().toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</p>
+      ${sections}
     </body>
   </html>`;
 }
 
 async function sendDigest(subscription) {
-  const result = await searchNaverNews(subscription.keyword, subscription.limit || DEFAULT_LIMIT);
+  const keywords = cleanKeywords(subscription.keywords && subscription.keywords.length ? subscription.keywords : subscription.keyword);
+  const results = [];
+
+  for (const keyword of keywords) {
+    results.push(await searchNaverNews(keyword, subscription.limit || DEFAULT_LIMIT));
+  }
+
+  const totalCount = results.reduce((sum, result) => sum + result.items.length, 0);
   await sendMail({
     to: subscription.email,
-    subject: `[Naver News] ${subscription.keyword} results (${result.items.length})`,
-    html: buildDigestHtml(subscription, result)
+    subject: `[Naver News] ${keywords.join(", ")} results (${totalCount})`,
+    html: buildDigestHtml({ ...subscription, keywords }, results)
   });
 
   subscription.lastSentAt = new Date().toISOString();
   subscription.lastStatus = "sent";
   subscription.lastError = "";
   await saveSubscriptions();
-  return result;
+  return { results, count: totalCount };
 }
 
 function todaySeoul() {
@@ -508,7 +557,10 @@ async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (req.method === "GET" && url.pathname === "/api/subscriptions") {
-    return json(res, 200, { subscriptions, smtpReady: Boolean(smtpConfig().host && smtpConfig().user && smtpConfig().pass) });
+    const gmail = gmailApiConfig();
+    const gmailReady = Boolean(gmail.clientId && gmail.clientSecret && gmail.refreshToken && gmail.user);
+    const smtpReady = Boolean(smtpConfig().host && smtpConfig().user && smtpConfig().pass);
+    return json(res, 200, { subscriptions, smtpReady, mailReady: gmailReady || smtpReady, storagePath: DATA_FILE });
   }
 
   if (req.method === "POST" && url.pathname === "/api/search") {
@@ -519,17 +571,18 @@ async function handleApi(req, res) {
 
   if (req.method === "POST" && url.pathname === "/api/subscriptions") {
     const body = await readJson(req);
-    const keyword = cleanKeyword(body.keyword);
+    const keywords = cleanKeywords(body.keywords || body.keyword);
     const email = String(body.email || "").trim();
     const sendTime = body.sendTime || DEFAULT_SEND_TIME;
 
-    if (!keyword) throw Object.assign(new Error("Enter a keyword."), { status: 400 });
+    if (!keywords.length) throw Object.assign(new Error("Enter at least one keyword."), { status: 400 });
     if (!isEmail(email)) throw Object.assign(new Error("Enter a valid email address."), { status: 400 });
     if (!isTime(sendTime)) throw Object.assign(new Error("Send time must use HH:MM format."), { status: 400 });
 
     const subscription = {
       id: crypto.randomUUID(),
-      keyword,
+      keyword: keywords[0],
+      keywords,
       email,
       sendTime,
       limit: Math.min(Math.max(Number(body.limit) || DEFAULT_LIMIT, 1), 30),
@@ -557,7 +610,25 @@ async function handleApi(req, res) {
     const subscription = subscriptions.find((item) => item.id === idMatch[1]);
     if (!subscription) return json(res, 404, { error: "Subscription not found." });
     if (typeof body.active === "boolean") subscription.active = body.active;
-    if (body.sendTime && isTime(body.sendTime)) subscription.sendTime = body.sendTime;
+    if (Object.prototype.hasOwnProperty.call(body, "keywords") || Object.prototype.hasOwnProperty.call(body, "keyword")) {
+      const keywords = cleanKeywords(body.keywords || body.keyword);
+      if (!keywords.length) throw Object.assign(new Error("Enter at least one keyword."), { status: 400 });
+      subscription.keyword = keywords[0];
+      subscription.keywords = keywords;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "email")) {
+      const email = String(body.email || "").trim();
+      if (!isEmail(email)) throw Object.assign(new Error("Enter a valid email address."), { status: 400 });
+      subscription.email = email;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "sendTime")) {
+      if (!isTime(body.sendTime)) throw Object.assign(new Error("Send time must use HH:MM format."), { status: 400 });
+      subscription.sendTime = body.sendTime;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "limit")) {
+      subscription.limit = Math.min(Math.max(Number(body.limit) || DEFAULT_LIMIT, 1), 30);
+    }
+    subscription.updatedAt = new Date().toISOString();
     await saveSubscriptions();
     return json(res, 200, { subscription });
   }
@@ -567,7 +638,7 @@ async function handleApi(req, res) {
     const subscription = subscriptions.find((item) => item.id === testMatch[1]);
     if (!subscription) return json(res, 404, { error: "Subscription not found." });
     const result = await sendDigest(subscription);
-    return json(res, 200, { ok: true, count: result.items.length });
+    return json(res, 200, { ok: true, count: result.count });
   }
 
   return json(res, 404, { error: "API not found." });
