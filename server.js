@@ -12,6 +12,7 @@ const DATA_FILE = path.join(DATA_DIR, "subscriptions.json");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DEFAULT_SEND_TIME = "09:00";
 const DEFAULT_LIMIT = 10;
+const SENT_ITEMS_LIMIT = 1000;
 
 let subscriptions = [];
 let schedulerBusy = false;
@@ -94,13 +95,38 @@ function normalizeSubscription(subscription) {
   const keywords = cleanKeywords(subscription.keywords && subscription.keywords.length
     ? subscription.keywords
     : subscription.keyword);
+  const sentItems = Array.isArray(subscription.sentItems)
+    ? subscription.sentItems.filter((item) => item && item.key).slice(-SENT_ITEMS_LIMIT)
+    : [];
+  const sentUrls = Array.isArray(subscription.sentUrls)
+    ? subscription.sentUrls.map((url) => ({ key: normalizeArticleKey({ url }), url, sentAt: subscription.lastSentAt || "" }))
+    : [];
+
   return {
     ...subscription,
     keyword: keywords[0] || cleanKeyword(subscription.keyword),
     keywords: keywords.length ? keywords : cleanKeywords(subscription.keyword),
     limit: Math.min(Math.max(Number(subscription.limit) || DEFAULT_LIMIT, 1), 30),
+    sentItems: [...sentItems, ...sentUrls].filter((item) => item.key).slice(-SENT_ITEMS_LIMIT),
     active: subscription.active !== false
   };
+}
+
+function normalizeArticleKey(item) {
+  if (item && item.url) {
+    try {
+      const url = new URL(item.url);
+      url.hash = "";
+      return url.toString();
+    } catch {
+      return String(item.url).trim();
+    }
+  }
+
+  return [item && item.title, item && item.source, item && item.dateText]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase())
+    .join("|");
 }
 
 function isEmail(value) {
@@ -477,12 +503,37 @@ function buildDigestHtml(subscription, results) {
 async function sendDigest(subscription) {
   const keywords = cleanKeywords(subscription.keywords && subscription.keywords.length ? subscription.keywords : subscription.keyword);
   const results = [];
+  const sentKeys = new Set((subscription.sentItems || []).map((item) => item.key).filter(Boolean));
+  const newSentItems = [];
 
   for (const keyword of keywords) {
-    results.push(await searchNaverNews(keyword, subscription.limit || DEFAULT_LIMIT));
+    const result = await searchNaverNews(keyword, subscription.limit || DEFAULT_LIMIT);
+    result.items = result.items.filter((item) => {
+      const key = normalizeArticleKey(item);
+      if (!key || sentKeys.has(key)) return false;
+      sentKeys.add(key);
+      newSentItems.push({
+        key,
+        url: item.url,
+        title: item.title,
+        source: item.source,
+        dateText: item.dateText,
+        sentAt: new Date().toISOString()
+      });
+      return true;
+    });
+    results.push(result);
   }
 
   const totalCount = results.reduce((sum, result) => sum + result.items.length, 0);
+  if (totalCount === 0) {
+    subscription.lastCheckedAt = new Date().toISOString();
+    subscription.lastStatus = "no_new";
+    subscription.lastError = "";
+    await saveSubscriptions();
+    return { results, count: 0, sent: false };
+  }
+
   await sendMail({
     to: subscription.email,
     subject: `[Naver News] ${keywords.join(", ")} results (${totalCount})`,
@@ -492,8 +543,9 @@ async function sendDigest(subscription) {
   subscription.lastSentAt = new Date().toISOString();
   subscription.lastStatus = "sent";
   subscription.lastError = "";
+  subscription.sentItems = [...(subscription.sentItems || []), ...newSentItems].slice(-SENT_ITEMS_LIMIT);
   await saveSubscriptions();
-  return { results, count: totalCount };
+  return { results, count: totalCount, sent: true };
 }
 
 function todaySeoul() {
@@ -591,7 +643,8 @@ async function handleApi(req, res) {
       lastSentAt: "",
       lastSentDate: "",
       lastStatus: "waiting",
-      lastError: ""
+      lastError: "",
+      sentItems: []
     };
     subscriptions.unshift(subscription);
     await saveSubscriptions();
@@ -638,7 +691,7 @@ async function handleApi(req, res) {
     const subscription = subscriptions.find((item) => item.id === testMatch[1]);
     if (!subscription) return json(res, 404, { error: "Subscription not found." });
     const result = await sendDigest(subscription);
-    return json(res, 200, { ok: true, count: result.count });
+    return json(res, 200, { ok: true, count: result.count, sent: result.sent });
   }
 
   return json(res, 404, { error: "API not found." });
