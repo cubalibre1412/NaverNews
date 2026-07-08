@@ -91,10 +91,31 @@ function cleanKeywords(value) {
   return keywords.slice(0, 20);
 }
 
+function cleanEmails(value) {
+  const raw = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[\n,;]+/);
+  const seen = new Set();
+  const emails = [];
+
+  for (const item of raw) {
+    const email = String(item || "").trim();
+    const key = email.toLowerCase();
+    if (!email || seen.has(key)) continue;
+    seen.add(key);
+    emails.push(email);
+  }
+
+  return emails.slice(0, 20);
+}
+
 function normalizeSubscription(subscription) {
   const keywords = cleanKeywords(subscription.keywords && subscription.keywords.length
     ? subscription.keywords
     : subscription.keyword);
+  const emails = cleanEmails(subscription.emails && subscription.emails.length
+    ? subscription.emails
+    : subscription.email);
   const sentItems = Array.isArray(subscription.sentItems)
     ? subscription.sentItems.filter((item) => item && item.key).slice(-SENT_ITEMS_LIMIT)
     : [];
@@ -106,6 +127,8 @@ function normalizeSubscription(subscription) {
     ...subscription,
     keyword: keywords[0] || cleanKeyword(subscription.keyword),
     keywords: keywords.length ? keywords : cleanKeywords(subscription.keyword),
+    email: emails[0] || String(subscription.email || "").trim(),
+    emails: emails.length ? emails : cleanEmails(subscription.email),
     limit: Math.min(Math.max(Number(subscription.limit) || DEFAULT_LIMIT, 1), 30),
     sentItems: [...sentItems, ...sentUrls].filter((item) => item.key).slice(-SENT_ITEMS_LIMIT),
     active: subscription.active !== false
@@ -502,6 +525,7 @@ function buildDigestHtml(subscription, results) {
 
 async function sendDigest(subscription) {
   const keywords = cleanKeywords(subscription.keywords && subscription.keywords.length ? subscription.keywords : subscription.keyword);
+  const emails = cleanEmails(subscription.emails && subscription.emails.length ? subscription.emails : subscription.email);
   const results = [];
   const sentKeys = new Set((subscription.sentItems || []).map((item) => item.key).filter(Boolean));
   const newSentItems = [];
@@ -525,6 +549,10 @@ async function sendDigest(subscription) {
     results.push(result);
   }
 
+  if (!emails.length) {
+    throw Object.assign(new Error("Subscription has no recipients."), { status: 400 });
+  }
+
   const totalCount = results.reduce((sum, result) => sum + result.items.length, 0);
   if (totalCount === 0) {
     subscription.lastCheckedAt = new Date().toISOString();
@@ -534,18 +562,21 @@ async function sendDigest(subscription) {
     return { results, count: 0, sent: false };
   }
 
-  await sendMail({
-    to: subscription.email,
-    subject: `[Naver News] ${keywords.join(", ")} results (${totalCount})`,
-    html: buildDigestHtml({ ...subscription, keywords }, results)
-  });
+  const subject = `[Naver News] ${keywords.join(", ")} results (${totalCount})`;
+  const html = buildDigestHtml({ ...subscription, keywords }, results);
+
+  for (const email of emails) {
+    await sendMail({ to: email, subject, html });
+  }
 
   subscription.lastSentAt = new Date().toISOString();
   subscription.lastStatus = "sent";
   subscription.lastError = "";
+  subscription.email = emails[0];
+  subscription.emails = emails;
   subscription.sentItems = [...(subscription.sentItems || []), ...newSentItems].slice(-SENT_ITEMS_LIMIT);
   await saveSubscriptions();
-  return { results, count: totalCount, sent: true };
+  return { results, count: totalCount, sent: true, recipients: emails.length };
 }
 
 function todaySeoul() {
@@ -624,18 +655,20 @@ async function handleApi(req, res) {
   if (req.method === "POST" && url.pathname === "/api/subscriptions") {
     const body = await readJson(req);
     const keywords = cleanKeywords(body.keywords || body.keyword);
-    const email = String(body.email || "").trim();
+    const emails = cleanEmails(body.emails || body.email);
     const sendTime = body.sendTime || DEFAULT_SEND_TIME;
 
     if (!keywords.length) throw Object.assign(new Error("Enter at least one keyword."), { status: 400 });
-    if (!isEmail(email)) throw Object.assign(new Error("Enter a valid email address."), { status: 400 });
+    if (!emails.length) throw Object.assign(new Error("Enter at least one email address."), { status: 400 });
+    if (emails.some((email) => !isEmail(email))) throw Object.assign(new Error("Enter valid email addresses."), { status: 400 });
     if (!isTime(sendTime)) throw Object.assign(new Error("Send time must use HH:MM format."), { status: 400 });
 
     const subscription = {
       id: crypto.randomUUID(),
       keyword: keywords[0],
       keywords,
-      email,
+      email: emails[0],
+      emails,
       sendTime,
       limit: Math.min(Math.max(Number(body.limit) || DEFAULT_LIMIT, 1), 30),
       active: true,
@@ -670,9 +703,18 @@ async function handleApi(req, res) {
       subscription.keywords = keywords;
     }
     if (Object.prototype.hasOwnProperty.call(body, "email")) {
-      const email = String(body.email || "").trim();
-      if (!isEmail(email)) throw Object.assign(new Error("Enter a valid email address."), { status: 400 });
-      subscription.email = email;
+      const emails = cleanEmails(body.emails || body.email);
+      if (!emails.length) throw Object.assign(new Error("Enter at least one email address."), { status: 400 });
+      if (emails.some((email) => !isEmail(email))) throw Object.assign(new Error("Enter valid email addresses."), { status: 400 });
+      subscription.email = emails[0];
+      subscription.emails = emails;
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "emails")) {
+      const emails = cleanEmails(body.emails);
+      if (!emails.length) throw Object.assign(new Error("Enter at least one email address."), { status: 400 });
+      if (emails.some((email) => !isEmail(email))) throw Object.assign(new Error("Enter valid email addresses."), { status: 400 });
+      subscription.email = emails[0];
+      subscription.emails = emails;
     }
     if (Object.prototype.hasOwnProperty.call(body, "sendTime")) {
       if (!isTime(body.sendTime)) throw Object.assign(new Error("Send time must use HH:MM format."), { status: 400 });
@@ -691,7 +733,7 @@ async function handleApi(req, res) {
     const subscription = subscriptions.find((item) => item.id === testMatch[1]);
     if (!subscription) return json(res, 404, { error: "Subscription not found." });
     const result = await sendDigest(subscription);
-    return json(res, 200, { ok: true, count: result.count, sent: result.sent });
+    return json(res, 200, { ok: true, count: result.count, sent: result.sent, recipients: result.recipients || 0 });
   }
 
   return json(res, 404, { error: "API not found." });
