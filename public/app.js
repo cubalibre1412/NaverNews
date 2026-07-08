@@ -69,12 +69,16 @@ function renderSubscriptions(subscriptions) {
   subscriptionsNode.innerHTML = `
     <ul class="sub-list">
       ${subscriptions.map((item) => `
+        ${(() => {
+          const emails = item.emails && item.emails.length ? item.emails : [item.email];
+          return `
         <li class="sub-item">
           <div class="sub-top">
             <div>
               <p class="sub-title">${escapeHtml((item.keywords && item.keywords.length ? item.keywords : [item.keyword]).join(", "))}</p>
               <div class="meta">
-                <span>${escapeHtml(item.email)}</span>
+                <span>${escapeHtml(emails.join(", "))}</span>
+                <span>${emails.length} recipient${emails.length === 1 ? "" : "s"}</span>
                 <span>Daily ${escapeHtml(item.sendTime)}</span>
                 <span>${item.limit} results</span>
                 ${item.sentItems && item.sentItems.length ? `<span>${item.sentItems.length} sent URLs stored</span>` : ""}
@@ -97,8 +101,8 @@ function renderSubscriptions(subscriptions) {
               <textarea name="keywords" rows="4" required>${escapeHtml((item.keywords && item.keywords.length ? item.keywords : [item.keyword]).join("\n"))}</textarea>
             </label>
             <label>
-              <span>Email</span>
-              <input name="email" type="email" value="${escapeHtml(item.email)}" required>
+              <span>Emails</span>
+              <textarea name="emails" rows="3" required>${escapeHtml(emails.join("\n"))}</textarea>
             </label>
             <div class="two-cols">
               <label>
@@ -116,6 +120,8 @@ function renderSubscriptions(subscriptions) {
             </div>
           </form>
         </li>
+          `;
+        })()}
       `).join("")}
     </ul>`;
 }
@@ -210,7 +216,7 @@ subscriptionsNode.addEventListener("click", async (event) => {
 
     if (action === "test") {
       const data = await api(`/api/subscriptions/${id}/test`, { method: "POST", body: "{}" });
-      notify(data.sent ? `Test email sent with ${data.count} new results.` : "No new articles to send.");
+      notify(data.sent ? `Test email sent to ${data.recipients} recipient(s) with ${data.count} new results.` : "No new articles to send.");
     }
 
     await loadSubscriptions();
