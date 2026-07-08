@@ -29,6 +29,8 @@ Only files under the disk mount path survive deploys and restarts on Render. If 
 
 Each subscription stores recently sent article URLs. After the first email, matching URLs are skipped in later emails so the same article is not sent again. If there are no new articles, the app does not send an empty email.
 
+One subscription can include multiple recipient emails. Emails are sent separately to each recipient.
+
 ## Gmail API setup for Render
 
 Render may time out when connecting to Gmail SMTP. The Gmail API path sends over HTTPS and avoids SMTP ports. Set:
@@ -74,7 +76,7 @@ If Naver requests fail because of a trusted corporate HTTPS inspection proxy, se
 ## Features
 
 - Preview latest Naver News search results.
-- Register multiple keywords, recipient email, daily send time, and result count.
+- Register multiple keywords, recipient emails, daily send time, and result count.
 - Edit, pause, resume, delete, and test subscriptions from the Subscriptions menu.
 - Skip articles that were already sent for the same subscription.
 - Send a test email for a subscription.
