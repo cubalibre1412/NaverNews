@@ -9,6 +9,16 @@ services:
         value: 4173
       - key: DATA_DIR
         sync: false
+      - key: GITHUB_STORAGE_REPO
+        sync: false
+      - key: GITHUB_STORAGE_PATH
+        value: data/subscriptions.json
+      - key: GITHUB_STORAGE_BRANCH
+        value: main
+      - key: GITHUB_STORAGE_TOKEN
+        sync: false
+      - key: SCHEDULER_TOKEN
+        sync: false
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
