@@ -19,6 +19,8 @@ services:
         sync: false
       - key: SCHEDULER_TOKEN
         sync: false
+      - key: ADMIN_TOKEN
+        sync: false
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT
