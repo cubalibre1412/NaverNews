@@ -14,6 +14,7 @@ const GITHUB_STORAGE_PATH = process.env.GITHUB_STORAGE_PATH || "data/subscriptio
 const GITHUB_STORAGE_BRANCH = process.env.GITHUB_STORAGE_BRANCH || "main";
 const GITHUB_STORAGE_TOKEN = process.env.GITHUB_STORAGE_TOKEN || "";
 const SCHEDULER_TOKEN = process.env.SCHEDULER_TOKEN || "";
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DEFAULT_SEND_TIME = "09:00";
 const DEFAULT_LIMIT = 10;
@@ -729,6 +730,20 @@ function isSchedulerAuthorized(req) {
     || (bearer && bearer[1] === SCHEDULER_TOKEN);
 }
 
+function isAdminAuthorized(req) {
+  if (!ADMIN_TOKEN) return true;
+  const authorization = req.headers.authorization || "";
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i);
+  return req.headers["x-admin-token"] === ADMIN_TOKEN
+    || (bearer && bearer[1] === ADMIN_TOKEN);
+}
+
+function requireAdmin(req, res) {
+  if (isAdminAuthorized(req)) return true;
+  json(res, 401, { error: "Admin token required." });
+  return false;
+}
+
 async function serveStatic(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const pathname = url.pathname === "/" ? "/index.html" : decodeURIComponent(url.pathname);
@@ -747,6 +762,7 @@ async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (req.method === "GET" && url.pathname === "/api/subscriptions") {
+    if (!requireAdmin(req, res)) return;
     const gmail = gmailApiConfig();
     const gmailReady = Boolean(gmail.clientId && gmail.clientSecret && gmail.refreshToken && gmail.user);
     const smtpReady = Boolean(smtpConfig().host && smtpConfig().user && smtpConfig().pass);
@@ -760,6 +776,7 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/subscriptions") {
+    if (!requireAdmin(req, res)) return;
     const body = await readJson(req);
     const keywords = cleanKeywords(body.keywords || body.keyword);
     const emails = cleanEmails(body.emails || body.email);
@@ -799,12 +816,14 @@ async function handleApi(req, res) {
 
   const idMatch = url.pathname.match(/^\/api\/subscriptions\/([^/]+)$/);
   if (idMatch && req.method === "DELETE") {
+    if (!requireAdmin(req, res)) return;
     subscriptions = subscriptions.filter((item) => item.id !== idMatch[1]);
     await saveSubscriptions();
     return json(res, 200, { ok: true });
   }
 
   if (idMatch && req.method === "PATCH") {
+    if (!requireAdmin(req, res)) return;
     const body = await readJson(req);
     const subscription = subscriptions.find((item) => item.id === idMatch[1]);
     if (!subscription) return json(res, 404, { error: "Subscription not found." });
@@ -843,6 +862,7 @@ async function handleApi(req, res) {
 
   const testMatch = url.pathname.match(/^\/api\/subscriptions\/([^/]+)\/test$/);
   if (testMatch && req.method === "POST") {
+    if (!requireAdmin(req, res)) return;
     const subscription = subscriptions.find((item) => item.id === testMatch[1]);
     if (!subscription) return json(res, 404, { error: "Subscription not found." });
     const result = await sendDigest(subscription);
