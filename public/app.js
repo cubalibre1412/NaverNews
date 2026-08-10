@@ -7,6 +7,7 @@ const refreshButton = document.querySelector("#refreshButton");
 const toast = document.querySelector("#toast");
 
 let toastTimer;
+let adminToken = localStorage.getItem("naverNewsAdminToken") || "";
 
 function notify(message, type = "ok") {
   clearTimeout(toastTimer);
@@ -18,11 +19,22 @@ function notify(message, type = "ok") {
 }
 
 async function api(path, options = {}) {
+  const headers = { "content-type": "application/json", ...(options.headers || {}) };
+  if (adminToken) headers["x-admin-token"] = adminToken;
+
   const response = await fetch(path, {
-    headers: { "content-type": "application/json" },
-    ...options
+    ...options,
+    headers
   });
   const data = await response.json();
+  if (response.status === 401 && data.error === "Admin token required.") {
+    const token = window.prompt("Admin token");
+    if (token) {
+      adminToken = token.trim();
+      localStorage.setItem("naverNewsAdminToken", adminToken);
+      return api(path, options);
+    }
+  }
   if (!response.ok) throw new Error(data.error || "Request failed.");
   return data;
 }

@@ -9,6 +9,12 @@ const tls = require("tls");
 const PORT = Number(process.env.PORT || 4173);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "subscriptions.json");
+const GITHUB_STORAGE_REPO = process.env.GITHUB_STORAGE_REPO || "";
+const GITHUB_STORAGE_PATH = process.env.GITHUB_STORAGE_PATH || "data/subscriptions.json";
+const GITHUB_STORAGE_BRANCH = process.env.GITHUB_STORAGE_BRANCH || "main";
+const GITHUB_STORAGE_TOKEN = process.env.GITHUB_STORAGE_TOKEN || "";
+const SCHEDULER_TOKEN = process.env.SCHEDULER_TOKEN || "";
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DEFAULT_SEND_TIME = "09:00";
 const DEFAULT_LIMIT = 10;
@@ -16,6 +22,7 @@ const SENT_ITEMS_LIMIT = 1000;
 
 let subscriptions = [];
 let schedulerBusy = false;
+let githubStorageSha = "";
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -53,6 +60,11 @@ async function readJson(req) {
 }
 
 async function loadSubscriptions() {
+  if (isGithubStorageEnabled()) {
+    subscriptions = await loadSubscriptionsFromGithub();
+    return;
+  }
+
   await fs.mkdir(DATA_DIR, { recursive: true });
   try {
     subscriptions = JSON.parse(await fs.readFile(DATA_FILE, "utf8"));
@@ -65,8 +77,90 @@ async function loadSubscriptions() {
 }
 
 async function saveSubscriptions() {
+  if (isGithubStorageEnabled()) {
+    await saveSubscriptionsToGithub();
+    return;
+  }
+
   await fs.mkdir(DATA_DIR, { recursive: true });
   await fs.writeFile(DATA_FILE, JSON.stringify(subscriptions, null, 2), "utf8");
+}
+
+function isGithubStorageEnabled() {
+  return Boolean(GITHUB_STORAGE_REPO && GITHUB_STORAGE_TOKEN);
+}
+
+function githubStorageUrl() {
+  return `https://api.github.com/repos/${GITHUB_STORAGE_REPO}/contents/${encodeURIComponent(GITHUB_STORAGE_PATH).replace(/%2F/g, "/")}`;
+}
+
+function storageDescription() {
+  if (isGithubStorageEnabled()) {
+    return `github:${GITHUB_STORAGE_REPO}:${GITHUB_STORAGE_BRANCH}:${GITHUB_STORAGE_PATH}`;
+  }
+  return DATA_FILE;
+}
+
+async function githubRequest(method, body) {
+  const url = method === "GET"
+    ? `${githubStorageUrl()}?ref=${encodeURIComponent(GITHUB_STORAGE_BRANCH)}`
+    : githubStorageUrl();
+  const response = await fetch(url, {
+    method,
+    headers: {
+      "accept": "application/vnd.github+json",
+      "authorization": `Bearer ${GITHUB_STORAGE_TOKEN}`,
+      "content-type": "application/json",
+      "user-agent": "naver-news-mailer"
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  const textBody = await response.text();
+  const data = textBody ? JSON.parse(textBody) : {};
+  if (!response.ok) {
+    const error = new Error(data.message || `GitHub storage request failed. (${response.status})`);
+    error.statusCode = response.status;
+    error.response = data;
+    throw error;
+  }
+  return data;
+}
+
+async function loadSubscriptionsFromGithub() {
+  try {
+    const data = await githubRequest("GET");
+    githubStorageSha = data.sha || "";
+    const content = Buffer.from(String(data.content || ""), "base64").toString("utf8");
+    const parsed = content.trim() ? JSON.parse(content) : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeSubscription) : [];
+  } catch (error) {
+    if (error.statusCode !== 404) throw error;
+    githubStorageSha = "";
+    return [];
+  }
+}
+
+async function saveSubscriptionsToGithub() {
+  const content = Buffer.from(JSON.stringify(subscriptions, null, 2), "utf8").toString("base64");
+  const payload = {
+    message: "Update NaverNews subscriptions",
+    content,
+    branch: GITHUB_STORAGE_BRANCH
+  };
+  if (githubStorageSha) payload.sha = githubStorageSha;
+
+  try {
+    const data = await githubRequest("PUT", payload);
+    githubStorageSha = data.content && data.content.sha ? data.content.sha : githubStorageSha;
+  } catch (error) {
+    if (error.statusCode !== 409) throw error;
+    await loadSubscriptionsFromGithub();
+    const retryPayload = { ...payload };
+    if (githubStorageSha) retryPayload.sha = githubStorageSha;
+    const data = await githubRequest("PUT", retryPayload);
+    githubStorageSha = data.content && data.content.sha ? data.content.sha : githubStorageSha;
+  }
 }
 
 function cleanKeyword(value) {
@@ -598,28 +692,56 @@ function timeSeoul() {
 }
 
 async function runScheduler() {
-  if (schedulerBusy) return;
+  const stats = { checked: 0, sent: 0, noNew: 0, failed: 0 };
+  if (schedulerBusy) return { ...stats, busy: true };
   schedulerBusy = true;
   try {
     const date = todaySeoul();
     const now = timeSeoul();
     for (const subscription of subscriptions) {
       if (!subscription.active) continue;
-      if ((subscription.sendTime || DEFAULT_SEND_TIME) !== now) continue;
+      if ((subscription.sendTime || DEFAULT_SEND_TIME) > now) continue;
       if (subscription.lastSentDate === date) continue;
+      stats.checked += 1;
 
       try {
-        await sendDigest(subscription);
+        const result = await sendDigest(subscription);
+        if (result.sent) stats.sent += 1;
+        else stats.noNew += 1;
         subscription.lastSentDate = date;
       } catch (error) {
         subscription.lastStatus = "failed";
         subscription.lastError = error.message;
+        stats.failed += 1;
       }
       await saveSubscriptions();
     }
+    return stats;
   } finally {
     schedulerBusy = false;
   }
+}
+
+function isSchedulerAuthorized(req) {
+  if (!SCHEDULER_TOKEN) return false;
+  const authorization = req.headers.authorization || "";
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i);
+  return req.headers["x-scheduler-token"] === SCHEDULER_TOKEN
+    || (bearer && bearer[1] === SCHEDULER_TOKEN);
+}
+
+function isAdminAuthorized(req) {
+  if (!ADMIN_TOKEN) return true;
+  const authorization = req.headers.authorization || "";
+  const bearer = authorization.match(/^Bearer\s+(.+)$/i);
+  return req.headers["x-admin-token"] === ADMIN_TOKEN
+    || (bearer && bearer[1] === ADMIN_TOKEN);
+}
+
+function requireAdmin(req, res) {
+  if (isAdminAuthorized(req)) return true;
+  json(res, 401, { error: "Admin token required." });
+  return false;
 }
 
 async function serveStatic(req, res) {
@@ -640,10 +762,11 @@ async function handleApi(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   if (req.method === "GET" && url.pathname === "/api/subscriptions") {
+    if (!requireAdmin(req, res)) return;
     const gmail = gmailApiConfig();
     const gmailReady = Boolean(gmail.clientId && gmail.clientSecret && gmail.refreshToken && gmail.user);
     const smtpReady = Boolean(smtpConfig().host && smtpConfig().user && smtpConfig().pass);
-    return json(res, 200, { subscriptions, smtpReady, mailReady: gmailReady || smtpReady, storagePath: DATA_FILE });
+    return json(res, 200, { subscriptions, smtpReady, mailReady: gmailReady || smtpReady, storagePath: storageDescription() });
   }
 
   if (req.method === "POST" && url.pathname === "/api/search") {
@@ -653,6 +776,7 @@ async function handleApi(req, res) {
   }
 
   if (req.method === "POST" && url.pathname === "/api/subscriptions") {
+    if (!requireAdmin(req, res)) return;
     const body = await readJson(req);
     const keywords = cleanKeywords(body.keywords || body.keyword);
     const emails = cleanEmails(body.emails || body.email);
@@ -684,14 +808,22 @@ async function handleApi(req, res) {
     return json(res, 201, { subscription });
   }
 
+  if (req.method === "POST" && url.pathname === "/api/scheduler/run") {
+    if (!isSchedulerAuthorized(req)) return json(res, 401, { error: "Unauthorized." });
+    const result = await runScheduler();
+    return json(res, 200, { ok: true, result });
+  }
+
   const idMatch = url.pathname.match(/^\/api\/subscriptions\/([^/]+)$/);
   if (idMatch && req.method === "DELETE") {
+    if (!requireAdmin(req, res)) return;
     subscriptions = subscriptions.filter((item) => item.id !== idMatch[1]);
     await saveSubscriptions();
     return json(res, 200, { ok: true });
   }
 
   if (idMatch && req.method === "PATCH") {
+    if (!requireAdmin(req, res)) return;
     const body = await readJson(req);
     const subscription = subscriptions.find((item) => item.id === idMatch[1]);
     if (!subscription) return json(res, 404, { error: "Subscription not found." });
@@ -730,6 +862,7 @@ async function handleApi(req, res) {
 
   const testMatch = url.pathname.match(/^\/api\/subscriptions\/([^/]+)\/test$/);
   if (testMatch && req.method === "POST") {
+    if (!requireAdmin(req, res)) return;
     const subscription = subscriptions.find((item) => item.id === testMatch[1]);
     if (!subscription) return json(res, 404, { error: "Subscription not found." });
     const result = await sendDigest(subscription);
