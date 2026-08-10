@@ -21,9 +21,12 @@ GITHUB_STORAGE_PATH=data/subscriptions.json
 GITHUB_STORAGE_BRANCH=main
 GITHUB_STORAGE_TOKEN=your-github-token
 SCHEDULER_TOKEN=your-random-scheduler-token
+ADMIN_TOKEN=your-random-admin-token
 ```
 
 Use a private repository for `GITHUB_STORAGE_REPO` because the JSON file contains recipient emails, keywords, and sent-article history. The token needs repository contents read/write access for that private repository. The app reads and writes the JSON file through the GitHub Contents API.
+
+Set `ADMIN_TOKEN` to protect subscription listing, editing, deleting, and test email sending. The browser asks for this token the first time the admin screen loads and stores it locally.
 
 If GitHub storage is not configured, the app falls back to local server storage. By default, the local file is:
 
