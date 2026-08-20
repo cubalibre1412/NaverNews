@@ -61,6 +61,7 @@ function renderResults(items) {
         <li class="news-item">
           <a href="${escapeHtml(item.url)}" target="_blank" rel="noreferrer">${escapeHtml(item.title)}</a>
           <div class="meta">
+            ${Number.isFinite(item.score) ? `<span>Relevance ${escapeHtml(item.score)}</span>` : ""}
             ${item.source ? `<span>${escapeHtml(item.source)}</span>` : ""}
             ${item.dateText ? `<span>${escapeHtml(item.dateText)}</span>` : ""}
           </div>
@@ -123,7 +124,7 @@ function renderSubscriptions(subscriptions) {
               </label>
               <label>
                 <span>Result count</span>
-                <input name="limit" type="number" min="1" max="30" value="${escapeHtml(item.limit)}" required>
+                <input name="limit" type="number" min="1" max="20" value="${escapeHtml(item.limit)}" required>
               </label>
             </div>
             <div class="sub-actions">
@@ -156,7 +157,7 @@ searchForm.addEventListener("submit", async (event) => {
   try {
     const data = await api("/api/search", {
       method: "POST",
-      body: JSON.stringify({ keyword, limit: 10 })
+      body: JSON.stringify({ keyword, limit: 20 })
     });
     renderResults(data.items);
   } catch (error) {
@@ -181,7 +182,7 @@ subscriptionForm.addEventListener("submit", async (event) => {
     });
     subscriptionForm.reset();
     subscriptionForm.sendTime.value = "09:00";
-    subscriptionForm.limit.value = "10";
+    subscriptionForm.limit.value = "20";
     await loadSubscriptions();
     notify("Subscription added.");
   } catch (error) {
@@ -267,3 +268,5 @@ refreshButton.addEventListener("click", () => {
 });
 
 loadSubscriptions().catch((error) => notify(error.message, "error"));
+
+

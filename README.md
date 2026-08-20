@@ -90,7 +90,7 @@ If Naver requests fail because of a trusted corporate HTTPS inspection proxy, se
 
 ## Features
 
-- Preview latest Naver News search results.
+- Rank a 30-article candidate pool by keyword relevance and show up to 20 top-scoring results.
 - Register multiple keywords, recipient emails, daily send time, and result count.
 - Edit, pause, resume, delete, and test subscriptions from the Subscriptions menu.
 - Skip articles that were already sent for the same subscription.
@@ -115,3 +115,5 @@ This repository includes `.github/workflows/render-free-scheduler.yml`, which ca
 SCHEDULER_TOKEN=the same value configured in Render
 NAVERNEWS_SCHEDULER_URL=https://navernews-5c32.onrender.com/api/scheduler/run
 ```
+
+

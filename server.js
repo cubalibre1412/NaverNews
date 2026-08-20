@@ -17,7 +17,9 @@ const SCHEDULER_TOKEN = process.env.SCHEDULER_TOKEN || "";
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DEFAULT_SEND_TIME = "09:00";
-const DEFAULT_LIMIT = 10;
+const DEFAULT_LIMIT = 20;
+const MAX_RESULT_LIMIT = 20;
+const CANDIDATE_POOL_LIMIT = 30;
 const SENT_ITEMS_LIMIT = 1000;
 
 let subscriptions = [];
@@ -223,7 +225,7 @@ function normalizeSubscription(subscription) {
     keywords: keywords.length ? keywords : cleanKeywords(subscription.keyword),
     email: emails[0] || String(subscription.email || "").trim(),
     emails: emails.length ? emails : cleanEmails(subscription.email),
-    limit: Math.min(Math.max(Number(subscription.limit) || DEFAULT_LIMIT, 1), 30),
+    limit: Math.min(Math.max(Number(subscription.limit) || DEFAULT_LIMIT, 1), MAX_RESULT_LIMIT),
     sentItems: [...sentItems, ...sentUrls].filter((item) => item.key).slice(-SENT_ITEMS_LIMIT),
     active: subscription.active !== false
   };
@@ -273,6 +275,76 @@ function stripTracking(url) {
   }
 }
 
+function normalizeSearchText(value) {
+  return String(value || "")
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function containsKeyword(text, keyword) {
+  if (!text || !keyword) return false;
+  if (/^[a-z0-9]+$/i.test(keyword)) {
+    return text.split(" ").includes(keyword);
+  }
+  return text.includes(keyword);
+}
+
+function scoreNaverNewsItem(item, query) {
+  const normalizedQuery = normalizeSearchText(query);
+  const title = normalizeSearchText(item && item.title);
+  const summary = normalizeSearchText(item && item.summary);
+  const terms = [...new Set(normalizedQuery.split(" ").filter(Boolean))];
+  if (!normalizedQuery || !terms.length) return { score: 0, matchedTerms: [] };
+
+  const matchedTitleTerms = terms.filter((term) => containsKeyword(title, term));
+  const matchedSummaryTerms = terms.filter((term) => containsKeyword(summary, term));
+  const matchedTerms = terms.filter((term) => (
+    matchedTitleTerms.includes(term) || matchedSummaryTerms.includes(term)
+  ));
+  const titleCoverage = matchedTitleTerms.length / terms.length;
+  const summaryCoverage = matchedSummaryTerms.length / terms.length;
+  const matchedTitleCharacters = matchedTitleTerms.reduce((sum, term) => sum + term.length, 0);
+  const titleDensity = title.length
+    ? Math.min(matchedTitleCharacters / title.replace(/\s/g, "").length, 1)
+    : 0;
+
+  let score = 0;
+  if (containsKeyword(title, normalizedQuery)) score += 40;
+  if (containsKeyword(summary, normalizedQuery)) score += 15;
+  score += titleCoverage * 25;
+  score += summaryCoverage * 10;
+  score += titleDensity * 10;
+
+  return {
+    score: Number(Math.min(score, 100).toFixed(1)),
+    matchedTerms
+  };
+}
+
+function rankNaverNewsItems(items, query, limit = DEFAULT_LIMIT) {
+  const resultLimit = Math.min(Math.max(Number(limit) || DEFAULT_LIMIT, 1), MAX_RESULT_LIMIT);
+  const seen = new Set();
+
+  return items
+    .filter((item) => {
+      const key = normalizeArticleKey(item);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((item, originalRank) => ({
+      ...item,
+      ...scoreNaverNewsItem(item, query),
+      originalRank
+    }))
+    .sort((a, b) => b.score - a.score || a.originalRank - b.originalRank)
+    .slice(0, resultLimit)
+    .map(({ originalRank, ...item }) => item);
+}
+
 function parseNaverNews(html, limit) {
   const items = [];
   const seen = new Set();
@@ -320,20 +392,34 @@ async function searchNaverNews(keyword, limit = DEFAULT_LIMIT) {
   const query = cleanKeyword(keyword);
   if (!query) throw Object.assign(new Error("Enter a search keyword."), { status: 400 });
 
-  const url = `https://search.naver.com/search.naver?where=news&sm=tab_jum&sort=1&query=${encodeURIComponent(query)}`;
-  const html = await requestHtml(url, {
-    headers: {
-      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
-    }
-  });
+  const encodedQuery = encodeURIComponent(query);
+  const pageStarts = Array.from(
+    { length: Math.ceil(CANDIDATE_POOL_LIMIT / 10) },
+    (_, index) => index * 10 + 1
+  );
+  const urls = pageStarts.map((start, index) => (
+    `https://search.naver.com/search.naver?where=news&sm=${index ? "tab_pge" : "tab_jum"}&sort=1&query=${encodedQuery}&start=${start}`
+  ));
+  const headers = {
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36"
+  };
+  const pageResults = await Promise.allSettled(
+    urls.map((url) => requestHtml(url, { headers }))
+  );
+  if (pageResults[0].status === "rejected") throw pageResults[0].reason;
+
+  const candidates = pageResults.flatMap((result) => (
+    result.status === "fulfilled" ? parseNaverNews(result.value, 20) : []
+  )).slice(0, CANDIDATE_POOL_LIMIT);
 
   return {
     keyword: query,
     fetchedAt: new Date().toISOString(),
-    sourceUrl: url,
-    items: parseNaverNews(html, Math.min(Math.max(Number(limit) || DEFAULT_LIMIT, 1), 30))
+    sourceUrl: urls[0],
+    candidateCount: candidates.length,
+    items: rankNaverNewsItems(candidates, query, limit)
   };
 }
 
@@ -590,7 +676,7 @@ function buildDigestHtml(subscription, results) {
       ? items.map((item, index) => `
       <li style="margin:0 0 18px;">
         <a href="${escapeHtml(item.url)}" style="font-weight:700;color:#1558d6;text-decoration:none;">${index + 1}. ${escapeHtml(item.title)}</a>
-        <div style="margin-top:5px;color:#667085;font-size:13px;">${escapeHtml([item.source, item.dateText].filter(Boolean).join(" - "))}</div>
+        <div style="margin-top:5px;color:#667085;font-size:13px;">${escapeHtml([item.source, item.dateText, `Relevance ${item.score}`].filter(Boolean).join(" - "))}</div>
         <p style="margin:6px 0 0;color:#344054;line-height:1.5;">${escapeHtml(item.summary)}</p>
       </li>`).join("")
       : "<li>No news results were found today.</li>";
@@ -794,7 +880,7 @@ async function handleApi(req, res) {
       email: emails[0],
       emails,
       sendTime,
-      limit: Math.min(Math.max(Number(body.limit) || DEFAULT_LIMIT, 1), 30),
+      limit: Math.min(Math.max(Number(body.limit) || DEFAULT_LIMIT, 1), MAX_RESULT_LIMIT),
       active: true,
       createdAt: new Date().toISOString(),
       lastSentAt: "",
@@ -853,7 +939,7 @@ async function handleApi(req, res) {
       subscription.sendTime = body.sendTime;
     }
     if (Object.prototype.hasOwnProperty.call(body, "limit")) {
-      subscription.limit = Math.min(Math.max(Number(body.limit) || DEFAULT_LIMIT, 1), 30);
+      subscription.limit = Math.min(Math.max(Number(body.limit) || DEFAULT_LIMIT, 1), MAX_RESULT_LIMIT);
     }
     subscription.updatedAt = new Date().toISOString();
     await saveSubscriptions();
@@ -893,7 +979,17 @@ async function main() {
   setInterval(runScheduler, 60 * 1000);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  normalizeSearchText,
+  scoreNaverNewsItem,
+  rankNaverNewsItems
+};
+
+
