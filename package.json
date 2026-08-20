@@ -4,7 +4,8 @@
   "description": "Naver News keyword subscriptions with daily email delivery.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "license": "UNLICENSED",
   "private": true,
@@ -12,3 +13,4 @@
     "node": ">=20"
   }
 }
+
