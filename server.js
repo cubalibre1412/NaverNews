@@ -876,8 +876,17 @@ function timeSeoul() {
   }).format(new Date());
 }
 
+function isWeekdaySeoul(value = new Date()) {
+  const weekday = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul",
+    weekday: "short"
+  }).format(value);
+  return weekday !== "Sat" && weekday !== "Sun";
+}
+
 async function runScheduler() {
   const stats = { checked: 0, sent: 0, noNew: 0, failed: 0 };
+  if (!isWeekdaySeoul()) return { ...stats, skippedWeekend: true };
   if (schedulerBusy) return { ...stats, busy: true };
   schedulerBusy = true;
   try {
@@ -1089,6 +1098,7 @@ module.exports = {
   articleSimilarity,
   dedupeSimilarArticles,
   isSimilarArticle,
+  isWeekdaySeoul,
   normalizeSearchText,
   selectDigestResults,
   scoreNaverNewsItem,

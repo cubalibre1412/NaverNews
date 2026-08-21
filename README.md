@@ -95,7 +95,7 @@ If Naver requests fail because of a trusted corporate HTTPS inspection proxy, se
 - Edit, pause, resume, delete, and test subscriptions from the Subscriptions menu.
 - Skip articles that were already sent for the same subscription.
 - Send a test email for a subscription.
-- Check every minute and send each active subscription once per day at the configured Korea time.
+- Check every minute and send each active subscription once per weekday at the configured Korea time.
 - Store subscriptions in `data/subscriptions.json` or the `DATA_DIR` path.
 
 ## Render Free scheduler
@@ -109,7 +109,7 @@ Authorization: Bearer your-random-scheduler-token
 
 The endpoint runs the same due-subscription check as the internal scheduler. Call it at least once per minute around the expected send time, or run it every minute during the morning send window.
 
-This repository includes `.github/workflows/render-free-scheduler.yml`, which calls the endpoint every five minutes from 09:00 to 11:55 Korea time. Add these repository secrets before enabling Render Free:
+This repository includes `.github/workflows/render-free-scheduler.yml`, which calls the endpoint every five minutes from 09:00 to 11:55 Korea time on weekdays. The server also blocks scheduled weekend sends. Add these repository secrets before enabling Render Free:
 
 ```text
 SCHEDULER_TOKEN=the same value configured in Render
