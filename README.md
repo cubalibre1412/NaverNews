@@ -90,7 +90,7 @@ If Naver requests fail because of a trusted corporate HTTPS inspection proxy, se
 
 ## Features
 
-- Rank a 30-article candidate pool by keyword relevance and show up to 20 top-scoring results.
+- Rank a 30-article candidate pool per keyword, remove URL and near-duplicate coverage, and send at most 20 results across the entire subscription.
 - Register multiple keywords, recipient emails, daily send time, and result count.
 - Edit, pause, resume, delete, and test subscriptions from the Subscriptions menu.
 - Skip articles that were already sent for the same subscription.
