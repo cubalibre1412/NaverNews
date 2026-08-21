@@ -2,11 +2,18 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  isWeekdaySeoul,
   isSimilarArticle,
   selectDigestResults,
   scoreNaverNewsItem,
   rankNaverNewsItems
 } = require("../server");
+
+test("scheduled delivery uses Korean weekdays", () => {
+  assert.equal(isWeekdaySeoul(new Date("2026-08-21T00:00:00Z")), true);
+  assert.equal(isWeekdaySeoul(new Date("2026-08-22T00:00:00Z")), false);
+  assert.equal(isWeekdaySeoul(new Date("2026-08-23T23:30:00Z")), true);
+});
 
 test("exact keyword phrase in the title ranks ahead of summary-only matches", () => {
   const items = [
