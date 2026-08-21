@@ -20,6 +20,8 @@ const DEFAULT_SEND_TIME = "09:00";
 const DEFAULT_LIMIT = 20;
 const MAX_RESULT_LIMIT = 20;
 const CANDIDATE_POOL_LIMIT = 30;
+const TITLE_SIMILARITY_THRESHOLD = 0.62;
+const SUMMARY_SIMILARITY_THRESHOLD = 0.58;
 const SENT_ITEMS_LIMIT = 1000;
 
 let subscriptions = [];
@@ -324,25 +326,118 @@ function scoreNaverNewsItem(item, query) {
   };
 }
 
+function contentShingles(value, size = 3) {
+  const text = normalizeSearchText(value)
+    .replace(/새 창 열림/g, "")
+    .replace(/\s/g, "");
+  if (!text) return new Set();
+  if (text.length <= size) return new Set([text]);
+
+  const shingles = new Set();
+  for (let index = 0; index <= text.length - size; index += 1) {
+    shingles.add(text.slice(index, index + size));
+  }
+  return shingles;
+}
+
+function jaccardSimilarity(left, right) {
+  if (!left.size || !right.size) return 0;
+  let intersection = 0;
+  for (const value of left) {
+    if (right.has(value)) intersection += 1;
+  }
+  return intersection / (left.size + right.size - intersection);
+}
+
+function articleSimilarity(left, right) {
+  const title = jaccardSimilarity(
+    contentShingles(left && left.title),
+    contentShingles(right && right.title)
+  );
+  const leftSummary = normalizeSearchText(left && left.summary);
+  const rightSummary = normalizeSearchText(right && right.summary);
+  const summary = leftSummary.length >= 40 && rightSummary.length >= 40
+    ? jaccardSimilarity(contentShingles(leftSummary), contentShingles(rightSummary))
+    : 0;
+
+  return { title, summary };
+}
+
+function isSimilarArticle(left, right) {
+  const leftTitle = normalizeSearchText(left && left.title).replace(/새 창 열림/g, "").trim();
+  const rightTitle = normalizeSearchText(right && right.title).replace(/새 창 열림/g, "").trim();
+  if (leftTitle && leftTitle === rightTitle) return true;
+
+  const similarity = articleSimilarity(left, right);
+  return similarity.title >= TITLE_SIMILARITY_THRESHOLD
+    || similarity.summary >= SUMMARY_SIMILARITY_THRESHOLD
+    || (
+      similarity.title >= 0.38
+      && similarity.summary >= 0.38
+      && similarity.title * 0.45 + similarity.summary * 0.55 >= 0.4
+    );
+}
+
+function dedupeSimilarArticles(items) {
+  const accepted = [];
+  const acceptedKeys = new Set();
+
+  for (const item of items) {
+    const key = normalizeArticleKey(item);
+    if (!key || acceptedKeys.has(key)) continue;
+    if (accepted.some((existing) => isSimilarArticle(existing, item))) continue;
+    acceptedKeys.add(key);
+    accepted.push(item);
+  }
+
+  return accepted;
+}
+
 function rankNaverNewsItems(items, query, limit = DEFAULT_LIMIT) {
   const resultLimit = Math.min(Math.max(Number(limit) || DEFAULT_LIMIT, 1), MAX_RESULT_LIMIT);
-  const seen = new Set();
 
-  return items
-    .filter((item) => {
-      const key = normalizeArticleKey(item);
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
+  const ranked = items
     .map((item, originalRank) => ({
       ...item,
       ...scoreNaverNewsItem(item, query),
       originalRank
     }))
-    .sort((a, b) => b.score - a.score || a.originalRank - b.originalRank)
+    .sort((a, b) => b.score - a.score || a.originalRank - b.originalRank);
+
+  return dedupeSimilarArticles(ranked)
     .slice(0, resultLimit)
     .map(({ originalRank, ...item }) => item);
+}
+
+function selectDigestResults(results, limit = DEFAULT_LIMIT) {
+  const resultLimit = Math.min(Math.max(Number(limit) || DEFAULT_LIMIT, 1), MAX_RESULT_LIMIT);
+  const candidates = results.flatMap((result, resultIndex) => (
+    result.items.map((item, itemIndex) => ({ item, resultIndex, itemIndex }))
+  ));
+  candidates.sort((left, right) => (
+    (right.item.score || 0) - (left.item.score || 0)
+      || left.resultIndex - right.resultIndex
+      || left.itemIndex - right.itemIndex
+  ));
+
+  const selected = [];
+  for (const candidate of candidates) {
+    if (selected.length >= resultLimit) break;
+    const key = normalizeArticleKey(candidate.item);
+    if (!key) continue;
+    if (selected.some((existing) => (
+      normalizeArticleKey(existing.item) === key
+      || isSimilarArticle(existing.item, candidate.item)
+    ))) continue;
+    selected.push(candidate);
+  }
+
+  return results.map((result, resultIndex) => ({
+    ...result,
+    items: selected
+      .filter((candidate) => candidate.resultIndex === resultIndex)
+      .map((candidate) => candidate.item)
+  }));
 }
 
 function parseNaverNews(html, limit) {
@@ -706,7 +801,7 @@ function buildDigestHtml(subscription, results) {
 async function sendDigest(subscription) {
   const keywords = cleanKeywords(subscription.keywords && subscription.keywords.length ? subscription.keywords : subscription.keyword);
   const emails = cleanEmails(subscription.emails && subscription.emails.length ? subscription.emails : subscription.email);
-  const results = [];
+  const searchedResults = [];
   const sentKeys = new Set((subscription.sentItems || []).map((item) => item.key).filter(Boolean));
   const newSentItems = [];
 
@@ -714,19 +809,23 @@ async function sendDigest(subscription) {
     const result = await searchNaverNews(keyword, subscription.limit || DEFAULT_LIMIT);
     result.items = result.items.filter((item) => {
       const key = normalizeArticleKey(item);
-      if (!key || sentKeys.has(key)) return false;
-      sentKeys.add(key);
+      return key && !sentKeys.has(key);
+    });
+    searchedResults.push(result);
+  }
+
+  const results = selectDigestResults(searchedResults, subscription.limit || DEFAULT_LIMIT);
+  for (const result of results) {
+    for (const item of result.items) {
       newSentItems.push({
-        key,
+        key: normalizeArticleKey(item),
         url: item.url,
         title: item.title,
         source: item.source,
         dateText: item.dateText,
         sentAt: new Date().toISOString()
       });
-      return true;
-    });
-    results.push(result);
+    }
   }
 
   if (!emails.length) {
@@ -987,7 +1086,11 @@ if (require.main === module) {
 }
 
 module.exports = {
+  articleSimilarity,
+  dedupeSimilarArticles,
+  isSimilarArticle,
   normalizeSearchText,
+  selectDigestResults,
   scoreNaverNewsItem,
   rankNaverNewsItems
 };
